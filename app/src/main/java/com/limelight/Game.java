@@ -127,12 +127,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private int suppressPipRefCount = 0;
     private String pcName;
     private String appName;
+    private NvApp app;
     private float desiredRefreshRate;
 
     private InputCaptureProvider inputCaptureProvider;
     private int modifierFlags = 0;
     private boolean grabbedInput = true;
-    private boolean grabComboDown = false;
+    private boolean cursorVisible = false;
+    private boolean waitingForAllModifiersUp = false;
+    private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
     private StreamView streamView;
     private long lastAbsTouchUpTime = 0;
     private long lastAbsTouchDownTime = 0;
@@ -143,8 +146,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
-
-    private ShortcutHelper shortcutHelper;
 
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
@@ -316,9 +317,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         int httpsPort = Game.this.getIntent().getIntExtra(EXTRA_HTTPS_PORT, 0); // 0 is treated as unknown
         int appId = Game.this.getIntent().getIntExtra(EXTRA_APP_ID, StreamConfiguration.INVALID_APP_ID);
         String uniqueId = Game.this.getIntent().getStringExtra(EXTRA_UNIQUEID);
-        String uuid = Game.this.getIntent().getStringExtra(EXTRA_PC_UUID);
         boolean appSupportsHdr = Game.this.getIntent().getBooleanExtra(EXTRA_APP_HDR, false);
         byte[] derCertData = Game.this.getIntent().getByteArrayExtra(EXTRA_SERVER_CERT);
+
+        app = new NvApp(appName != null ? appName : "app", appId, appSupportsHdr);
 
         X509Certificate serverCert = null;
         try {
@@ -333,17 +335,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (appId == StreamConfiguration.INVALID_APP_ID) {
             finish();
             return;
-        }
-
-        // Report this shortcut being used
-        ComputerDetails computer = new ComputerDetails();
-        computer.name = pcName;
-        computer.uuid = uuid;
-        shortcutHelper = new ShortcutHelper(this);
-        shortcutHelper.reportComputerShortcutUsed(computer);
-        if (appName != null) {
-            // This may be null if launched from the "Resume Session" PC context menu item
-            shortcutHelper.reportGameLaunched(computer, new NvApp(appName, appId, appSupportsHdr));
         }
 
         // Initialize the MediaCodec helper before creating the decoder
@@ -477,14 +468,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setResolution(prefConfig.width, prefConfig.height)
                 .setLaunchRefreshRate(prefConfig.fps)
                 .setRefreshRate(chosenFrameRate)
-                .setApp(new NvApp(appName != null ? appName : "app", appId, appSupportsHdr))
+                .setApp(app)
                 .setBitrate(prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
                 .setMaxPacketSize(1392)
                 .setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO) // NvConnection will perform LAN and VPN detection
                 .setHevcBitratePercentageMultiplier(75)
-                .setAv1BitratePercentageMultiplier(60)
+                .setAv1BitratePercentageMultiplier(75)
                 .setSupportedVideoFormats(supportedVideoFormats)
                 .setAttachedGamepadMask(gamepadMask)
                 .setClientRefreshRateX100((int)(displayRefreshRate * 100))
@@ -504,7 +495,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         keyboardTranslator = new KeyboardTranslator();
 
         InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
-        inputManager.registerInputDeviceListener(controllerHandler, null);
         inputManager.registerInputDeviceListener(keyboardTranslator, null);
 
         // Initialize touch contexts
@@ -1088,11 +1078,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     protected void onDestroy() {
         super.onDestroy();
 
-        InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
         if (controllerHandler != null) {
-            inputManager.unregisterInputDeviceListener(controllerHandler);
+            controllerHandler.destroy();
         }
         if (keyboardTranslator != null) {
+            InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
             inputManager.unregisterInputDeviceListener(keyboardTranslator);
         }
 
@@ -1110,6 +1100,21 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Destroy the capture provider
         inputCaptureProvider.destroy();
+    }
+
+    @Override
+    protected void onPause() {
+        if (isFinishing()) {
+            // Stop any further input device notifications before we lose focus (and pointer capture)
+            if (controllerHandler != null) {
+                controllerHandler.stop();
+            }
+
+            // Ungrab input to prevent further input device notifications
+            setInputGrabState(false);
+        }
+
+        super.onPause();
     }
 
     @Override
@@ -1188,6 +1193,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // Grab/ungrab the mouse cursor
         if (grab) {
             inputCaptureProvider.enableCapture();
+
+            // Enabling capture may hide the cursor again, so
+            // we will need to show it again.
+            if (cursorVisible) {
+                inputCaptureProvider.showCursor();
+            }
         }
         else {
             inputCaptureProvider.disableCapture();
@@ -1209,6 +1220,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // Returns true if the key stroke was consumed
     private boolean handleSpecialKeys(int androidKeyCode, boolean down) {
         int modifierMask = 0;
+        int nonModifierKeyCode = KeyEvent.KEYCODE_UNKNOWN;
 
         if (androidKeyCode == KeyEvent.KEYCODE_CTRL_LEFT ||
             androidKeyCode == KeyEvent.KEYCODE_CTRL_RIGHT) {
@@ -1226,6 +1238,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 androidKeyCode == KeyEvent.KEYCODE_META_RIGHT) {
             modifierMask = KeyboardPacket.MODIFIER_META;
         }
+        else {
+            nonModifierKeyCode = androidKeyCode;
+        }
 
         if (down) {
             this.modifierFlags |= modifierMask;
@@ -1234,36 +1249,62 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             this.modifierFlags &= ~modifierMask;
         }
 
-        // Check if Ctrl+Alt+Shift+Z is pressed
-        if (androidKeyCode == KeyEvent.KEYCODE_Z &&
-            (modifierFlags & (KeyboardPacket.MODIFIER_CTRL | KeyboardPacket.MODIFIER_ALT | KeyboardPacket.MODIFIER_SHIFT)) ==
-                (KeyboardPacket.MODIFIER_CTRL | KeyboardPacket.MODIFIER_ALT | KeyboardPacket.MODIFIER_SHIFT))
-        {
-            if (down) {
-                // Now that we've pressed the magic combo
-                // we'll wait for one of the keys to come up
-                grabComboDown = true;
+        // Handle the special combos on the key up
+        if (waitingForAllModifiersUp || specialKeyCode != KeyEvent.KEYCODE_UNKNOWN) {
+            if (specialKeyCode == androidKeyCode) {
+                // If this is a key up for the special key itself, eat that because the host never saw the original key down
+                return true;
+            }
+            else if (modifierFlags != 0) {
+                // While we're waiting for modifiers to come up, eat all key downs and allow all key ups to pass
+                return down;
             }
             else {
-                // Toggle the grab if Z comes up
-                Handler h = getWindow().getDecorView().getHandler();
-                if (h != null) {
-                    h.postDelayed(toggleGrab, 250);
+                // When all modifiers are up, perform the special action
+                switch (specialKeyCode) {
+                    // Toggle input grab
+                    case KeyEvent.KEYCODE_Z:
+                        Handler h = getWindow().getDecorView().getHandler();
+                        if (h != null) {
+                            h.postDelayed(toggleGrab, 250);
+                        }
+                        break;
+
+                    // Quit
+                    case KeyEvent.KEYCODE_Q:
+                        finish();
+                        break;
+
+                    // Toggle cursor visibility
+                    case KeyEvent.KEYCODE_C:
+                        if (!grabbedInput) {
+                            inputCaptureProvider.enableCapture();
+                            grabbedInput = true;
+                        }
+                        cursorVisible = !cursorVisible;
+                        if (cursorVisible) {
+                            inputCaptureProvider.showCursor();
+                        } else {
+                            inputCaptureProvider.hideCursor();
+                        }
+                        break;
+
+                    default:
+                        break;
                 }
 
-                grabComboDown = false;
+                // Reset special key state
+                specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+                waitingForAllModifiersUp = false;
             }
-
-            return true;
         }
-        // Toggle the grab if control or shift comes up
-        else if (grabComboDown) {
-            Handler h = getWindow().getDecorView().getHandler();
-            if (h != null) {
-                h.postDelayed(toggleGrab, 250);
-            }
-
-            grabComboDown = false;
+        // Check if Ctrl+Alt+Shift is down when a non-modifier key is pressed
+        else if ((modifierFlags & (KeyboardPacket.MODIFIER_CTRL | KeyboardPacket.MODIFIER_ALT | KeyboardPacket.MODIFIER_SHIFT)) ==
+                (KeyboardPacket.MODIFIER_CTRL | KeyboardPacket.MODIFIER_ALT | KeyboardPacket.MODIFIER_SHIFT) &&
+                (down && nonModifierKeyCode != KeyEvent.KEYCODE_UNKNOWN)) {
+            // Remember that a special key combo was activated, so we can consume all key events until the modifiers come up
+            specialKeyCode = androidKeyCode;
+            waitingForAllModifiersUp = true;
             return true;
         }
 
@@ -1762,7 +1803,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // Returns true if the event was consumed
     // NB: View is only present if called from a view callback
     private boolean handleMotionEvent(View view, MotionEvent event) {
-        // Pass through keyboard input if we're not grabbing
+        // Pass through mouse/touch/joystick input if we're not grabbing
         if (!grabbedInput) {
             return false;
         }
@@ -1830,7 +1871,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
                     if (deltaX != 0 || deltaY != 0) {
                         if (prefConfig.absoluteMouseMode) {
-                            conn.sendMouseMoveAsMousePosition(deltaX, deltaY, (short)view.getWidth(), (short)view.getHeight());
+                            // NB: view may be null, but we can unconditionally use streamView because we don't need to adjust
+                            // relative axis deltas for the position of the streamView within the parent's coordinate system.
+                            conn.sendMouseMoveAsMousePosition(deltaX, deltaY, (short)streamView.getWidth(), (short)streamView.getHeight());
                         }
                         else {
                             conn.sendMouseMove(deltaX, deltaY);
@@ -2280,6 +2323,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // Let the display go to sleep now
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+                // Stop processing controller input
+                controllerHandler.stop();
+
                 // Ungrab input
                 setInputGrabState(false);
 
@@ -2404,6 +2450,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 hideSystemUi(1000);
             }
         });
+
+        // Report this shortcut being used (off the main thread to prevent ANRs)
+        ComputerDetails computer = new ComputerDetails();
+        computer.name = pcName;
+        computer.uuid = Game.this.getIntent().getStringExtra(EXTRA_PC_UUID);
+        ShortcutHelper shortcutHelper = new ShortcutHelper(this);
+        shortcutHelper.reportComputerShortcutUsed(computer);
+        if (appName != null) {
+            // This may be null if launched from the "Resume Session" PC context menu item
+            shortcutHelper.reportGameLaunched(computer, app);
+        }
     }
 
     @Override

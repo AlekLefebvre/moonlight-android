@@ -190,8 +190,13 @@ public class StreamSettings extends Activity {
         }
 
         private void addNativeFrameRateEntry(float framerate) {
+            int frameRateRounded = Math.round(framerate);
+            if (frameRateRounded == 0) {
+                return;
+            }
+
             ListPreference pref = (ListPreference) findPreference(PreferenceConfiguration.FPS_PREF_STRING);
-            String fpsValue = Integer.toString(Math.round(framerate));
+            String fpsValue = Integer.toString(frameRateRounded);
             String fpsName = getResources().getString(R.string.resolution_prefix_native) +
                     " (" + fpsValue + " " + getResources().getString(R.string.fps_suffix_fps) + ")";
 
@@ -304,6 +309,14 @@ public class StreamSettings extends Activity {
                 category.removePreference(findPreference("checkbox_gamepad_motion_fallback"));
             }
 
+            // Hide USB driver options on devices without USB host support
+            if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
+                PreferenceCategory category =
+                        (PreferenceCategory) findPreference("category_gamepad_settings");
+                category.removePreference(findPreference("checkbox_usb_bind_all"));
+                category.removePreference(findPreference("checkbox_usb_driver"));
+            }
+
             // Remove PiP mode on devices pre-Oreo, where the feature is not available (some low RAM devices),
             // and on Fire OS where it violates the Amazon App Store guidelines for some reason.
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
@@ -338,12 +351,11 @@ public class StreamSettings extends Activity {
                 category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
             }
 
-            int maxSupportedFps = 0;
+            Display display = getActivity().getWindowManager().getDefaultDisplay();
+            float maxSupportedFps = display.getRefreshRate();
 
             // Hide non-supported resolution/FPS combinations
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                Display display = getActivity().getWindowManager().getDefaultDisplay();
-
                 int maxSupportedResW = 0;
 
                 // Add a native resolution with any insets included for users that don't want content
@@ -411,7 +423,7 @@ public class StreamSettings extends Activity {
                     }
 
                     if (candidate.getRefreshRate() > maxSupportedFps) {
-                        maxSupportedFps = (int)candidate.getRefreshRate();
+                        maxSupportedFps = candidate.getRefreshRate();
                     }
                 }
 
@@ -504,7 +516,7 @@ public class StreamSettings extends Activity {
                 // getRealMetrics() function (unlike the lies that getWidth() and getHeight()
                 // tell to us).
                 DisplayMetrics metrics = new DisplayMetrics();
-                getActivity().getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
+                display.getRealMetrics(metrics);
                 int width = Math.max(metrics.widthPixels, metrics.heightPixels);
                 int height = Math.min(metrics.widthPixels, metrics.heightPixels);
                 addNativeResolutionEntries(width, height, false);
@@ -512,7 +524,6 @@ public class StreamSettings extends Activity {
             else {
                 // On Android 4.1, we have to resort to reflection to invoke hidden APIs
                 // to get the real screen dimensions.
-                Display display = getActivity().getWindowManager().getDefaultDisplay();
                 try {
                     Method getRawHeightFunc = Display.class.getMethod("getRawHeight");
                     Method getRawWidthFunc = Display.class.getMethod("getRawWidth");
@@ -603,7 +614,6 @@ public class StreamSettings extends Activity {
                 category.removePreference(findPreference("checkbox_enable_hdr"));
             }
             else {
-                Display display = getActivity().getWindowManager().getDefaultDisplay();
                 Display.HdrCapabilities hdrCaps = display.getHdrCapabilities();
 
                 // We must now ensure our display is compatible with HDR10

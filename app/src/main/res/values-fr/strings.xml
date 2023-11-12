@@ -126,8 +126,8 @@
     <string name="summary_resolution_list">Le réglage de valeurs trop élevées pour votre appareil peut provoquer un retard ou un plantage.</string>
     <string name="title_fps_list">Fréquence d\'images vidéo</string>
     <string name="summary_fps_list">Augmenter pour un flux vidéo plus lisse. Diminution pour de meilleures performances sur les périphériques bas de gamme.</string>
-    <string name="title_seekbar_bitrate">Sélectionnez le bitrate vidéo à obtenir</string>
-    <string name="summary_seekbar_bitrate">Bitrate inférieur pour réduire la saccade. Augmentez le bitrate pour augmenter la qualité de l\'image.</string>
+    <string name="title_seekbar_bitrate">Bitrate vidéo</string>
+    <string name="summary_seekbar_bitrate">Augmentez-le pour une meilleure qualité d’image. Diminuez-le pour améliorer les performances sur les connexions plus lentes.</string>
     <string name="title_checkbox_stretch_video">Étirez la vidéo en plein écran</string>
     <string name="title_checkbox_disable_warnings">Désactiver les messages d\'avertissement</string>
     <string name="title_checkbox_enable_pip">Activer le mode observateur dans l\'image</string>
@@ -274,4 +274,8 @@
     <string name="title_checkbox_gamepad_touchpad_as_mouse">Toujours controller la souris avec le pavé tactile</string>
     <string name="summary_checkbox_gamepad_touchpad_as_mouse">Force le pavé tactile de la manette à contrôler la souris de l\'hôte, même quand l\'émulation d\'une manette par le pavé tactile est activée.</string>
     <string name="summary_checkbox_gamepad_motion_sensors">Permet aux hôtes pris en charge de demander des données de capteur de mouvement lors de l\'émulation d\'une manette avec des capteurs de mouvement. Désactiver ce paramètre peut réduire légèrement l\'utilisation de l\'alimentation et du réseau si les capteurs de mouvement ne sont pas utilisés en jeu.</string>
+    <string name="toast_controller_type_changed">Le type de manette peut être modifié en raison de l\'émulation du capteur de mouvement</string>
+    <string name="summary_checkbox_gamepad_motion_fallback">Utilise les capteurs de mouvement de votre appareil si la manette connéctée n\'en a pas, ou qu\'ils ne sont pas pris en charge par votre version d\'Android.
+\nRemarque : l\'activation de cette option peut faire apparaître votre manette de jeu comme une manette PlayStation du côté hôte.</string>
+    <string name="title_checkbox_gamepad_motion_fallback">Émuler les capteurs de mouvement de la manette</string>
 </resources>
